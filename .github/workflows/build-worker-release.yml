@@ -1,0 +1,119 @@
+name: Build Worker Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "EZ-SEO branch, tag, or commit to build"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            os: windows-latest
+            asset: worker-windows-latest.zip
+          - target: macos-apple-silicon
+            os: macos-latest
+            asset: worker-macos-apple-silicon-latest.zip
+          - target: macos-intel
+            os: macos-15-intel
+            asset: worker-macos-intel-latest.zip
+
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: HatoriHanzou/EZ-SEO
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          ref: ${{ github.event.inputs.source_ref || 'main' }}
+          path: source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller (Windows)
+        if: matrix.target == 'windows'
+        working-directory: source
+        run: pyinstaller worker-windows-latest.spec --clean --noconfirm
+
+      - name: Verify build inputs (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        working-directory: source
+        run: |
+          Get-Content worker_release.json
+          Select-String -Path tnnt_worker.py -Pattern "Prompt marker not visible" -SimpleMatch
+          if (!(Test-Path "dist\EZ-SEO-Worker-Windows.exe")) { throw "Windows worker exe was not built" }
+
+      - name: Build with PyInstaller (macOS)
+        if: startsWith(matrix.target, 'macos-')
+        working-directory: source
+        run: pyinstaller worker-macos-latest.spec --clean --noconfirm
+
+      - name: Verify build inputs (macOS)
+        if: startsWith(matrix.target, 'macos-')
+        working-directory: source
+        run: |
+          cat worker_release.json
+          uname -m
+          grep -q "Prompt marker not visible" tnnt_worker.py
+          test -d "dist/EZ-SEO-Worker-macOS.app"
+          expected_version="$(python -c 'import json; print(json.load(open("worker_release.json"))["version"])')"
+          bundle_version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "dist/EZ-SEO-Worker-macOS.app/Contents/Info.plist")"
+          echo "Expected worker version: ${expected_version}"
+          echo "Bundle worker version: ${bundle_version}"
+          test "${bundle_version}" = "${expected_version}"
+
+      - name: Compress build (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path source\dist\EZ-SEO-Worker-Windows.exe -DestinationPath ${{ matrix.asset }}
+
+      - name: Compress build (macOS)
+        if: startsWith(matrix.target, 'macos-')
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "source/dist/EZ-SEO-Worker-macOS.app" "${{ matrix.asset }}"
+          rm -rf verify_zip
+          mkdir verify_zip
+          ditto -x -k "${{ matrix.asset }}" verify_zip
+          expected_version="$(python -c 'import json; print(json.load(open("source/worker_release.json"))["version"])')"
+          zipped_version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "verify_zip/EZ-SEO-Worker-macOS.app/Contents/Info.plist")"
+          echo "Zipped worker version: ${zipped_version}"
+          test "${zipped_version}" = "${expected_version}"
+
+      - name: Delete previous release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete-asset worker-latest "${{ matrix.asset }}" --yes || true
+
+      - name: Upload to public release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: worker-latest
+          name: "EZ SEO Worker - Latest Build"
+          files: ${{ matrix.asset }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
