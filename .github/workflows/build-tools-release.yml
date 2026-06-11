@@ -1,0 +1,148 @@
+name: Build Tools Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "EZ-SEO branch, tag, or commit to build"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+
+jobs:
+  pdf-prepper:
+    name: Build PDF Prepper ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            os: windows-latest
+            artifact_name: tnnt-pdf-prepper-win
+            executable_name: tnnt_pdf_prepper.exe
+          - target: macos
+            os: macos-latest
+            artifact_name: tnnt-pdf-prepper-mac
+            executable_name: tnnt_pdf_prepper
+
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: HatoriHanzou/EZ-SEO
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          ref: ${{ github.event.inputs.source_ref || 'main' }}
+          path: source
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller python-docx pandas openpyxl fpdf2 numpy pyarrow xlrd olefile pywin32
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller python-docx pandas openpyxl fpdf2 numpy pyarrow xlrd olefile
+
+      - name: Build with PyInstaller (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: source
+        run: |
+          cp resources/worker/logo.ico logo.ico
+          if (!(Test-Path "logo.ico")) { throw "Logo icon not found!" }
+          if (!(Test-Path "public\assets\fonts\DejaVuSans.ttf")) { throw "Font file not found!" }
+          pyinstaller --noconfirm --onefile --windowed --clean --icon="logo.ico" --add-data "resources/worker/logo.ico;resources/worker" --add-data "public\assets\fonts\DejaVuSans.ttf;." --name "${{ matrix.executable_name }}" --hidden-import sys --hidden-import os --hidden-import tkinter --hidden-import urllib.request --hidden-import traceback --hidden-import importlib --hidden-import fpdf --hidden-import pandas --hidden-import openpyxl --hidden-import xlrd --hidden-import docx --hidden-import win32com --hidden-import win32com.client --hidden-import olefile tnnt_pdf_prepper.py
+
+      - name: Build with PyInstaller (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: source
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --clean --icon="resources/worker/logo.ico" --add-data "resources/worker/logo.ico:resources/worker" --add-data "public/assets/fonts/DejaVuSans.ttf:." --name "${{ matrix.executable_name }}" --hidden-import sys --hidden-import os --hidden-import tkinter --hidden-import urllib.request --hidden-import traceback --hidden-import importlib --hidden-import fpdf --hidden-import pandas --hidden-import openpyxl --hidden-import xlrd --hidden-import docx --hidden-import olefile tnnt_pdf_prepper.py
+
+      - name: Prepare archive (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Compress-Archive -Path source\dist\${{ matrix.executable_name }} -DestinationPath ${{ matrix.artifact_name }}.zip
+
+      - name: Prepare archive (macOS)
+        if: matrix.os == 'macos-latest'
+        run: zip -j ${{ matrix.artifact_name }}.zip source/dist/${{ matrix.executable_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+
+  publish-pdf-prepper:
+    name: Publish PDF Prepper release
+    needs: pdf-prepper
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts/
+          merge-multiple: true
+
+      - name: Upload to public release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pdf-prepper-latest
+          name: "TNNT PDF Prepper - Latest Build"
+          files: ./artifacts/*.zip
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  helper:
+    name: Publish TNNT SEO Helper release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: HatoriHanzou/EZ-SEO
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          ref: ${{ github.event.inputs.source_ref || 'main' }}
+          path: source
+
+      - name: Prepare plugin directory
+        run: |
+          mkdir -p dist/tnnt-seo-helper
+          cp source/public/plugins/tnnt-seo-helper.php dist/tnnt-seo-helper/
+
+      - name: Zip plugin
+        run: |
+          cd dist
+          zip -r ../tnnt-seo-helper.zip tnnt-seo-helper/
+          cd ..
+
+      - name: Upload to public release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: helper-latest
+          name: "TNNT SEO Helper Plugin - Latest"
+          files: tnnt-seo-helper.zip
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
