@@ -63,7 +63,7 @@ jobs:
         working-directory: source
         run: |
           Get-Content worker_release.json
-          Select-String -Path tnnt_worker.py -Pattern "Prompt marker not visible" -SimpleMatch
+          Select-String -Path tnnt_worker.py -Pattern "IMAGE SIZE CONSTRAINT" -SimpleMatch
           if (!(Test-Path "dist\EZ-SEO-Worker-Windows.exe")) { throw "Windows worker exe was not built" }
 
       - name: Build with PyInstaller (macOS)
@@ -77,7 +77,7 @@ jobs:
         run: |
           cat worker_release.json
           uname -m
-          grep -q "Prompt marker not visible" tnnt_worker.py
+          grep -q "IMAGE SIZE CONSTRAINT" tnnt_worker.py
           test -d "dist/EZ-SEO-Worker-macOS.app"
           expected_version="$(python -c 'import json; print(json.load(open("worker_release.json"))["version"])')"
           bundle_version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "dist/EZ-SEO-Worker-macOS.app/Contents/Info.plist")"
